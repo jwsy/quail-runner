@@ -1,4 +1,6 @@
-# Quail Runner - Neon Tape
+# Quail Runner
+
+![Quail Runner demo](docs/quail-runner-demo.mov-hq.gif)
 
 A Chrome dino runner-style game built with Kaplay.js, optimized for iPhone 15 landscape play.
 
