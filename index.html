@@ -4,11 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
     <title>Quail Runner</title>
-    <meta name="theme-color" content="#1a1a2e">
-    <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="assets/icons/favicon-16x16.png">
-    <link rel="icon" href="assets/icons/favicon.ico" sizes="any">
     <style>
         :root { --safe-area-top: env(safe-area-inset-top, 0px); }
         body {
@@ -104,7 +99,7 @@
         // Game objects
         let quail = {
             x: QUAIL_X,
-            y: GROUND_Y - 55, // start ~10px above ground with larger sprite
+            y: GROUND_Y - 35, // start ~10px above ground with larger sprite
             width: 60,        // 50% larger
             height: 45,       // 50% larger
             velocityY: 0,
@@ -716,7 +711,7 @@
             
             quail.x = QUAIL_X;
             // place just above ground allowing for sprite height
-            quail.y = GROUND_Y - (quail.height + 10);
+            quail.y = GROUND_Y - (quail.height - 20);
             quail.velocityY = 0;
             quail.velocityX = 0;
             quail.isGrounded = true;
@@ -811,21 +806,6 @@
             const now = Date.now();
             
             if (!gameRunning) {
-                // Allow tapping the word QUAIL to start in GEORGIA RB mode
-                const rect = canvas.getBoundingClientRect();
-                const touch = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]);
-                if (touch) {
-                    const scaleX = canvas.width / rect.width;
-                    const scaleY = canvas.height / rect.height;
-                    const px = (touch.clientX - rect.left) * scaleX;
-                    const py = (touch.clientY - rect.top) * scaleY;
-                    if (score === 0 && quailTextBounds) {
-                        const b = quailTextBounds;
-                        if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) {
-                            georgiaRBMode = true;
-                        }
-                    }
-                }
                 startGame();
             } else {
                 // Double tap detection
@@ -868,7 +848,7 @@
         });
         
         canvas.addEventListener('click', (e) => {
-            // Click starts/restarts the game only; gameplay jumps handled on mouseup
+            // Use click only to start/restart; gameplay jumps handled via touch/keyboard release
             if (!gameRunning) {
                 const rect = canvas.getBoundingClientRect();
                 const scaleX = canvas.width / rect.width;
