@@ -81,7 +81,7 @@
         
         // Game state
         let gameRunning = false;
-        let gameSpeed = 5; // start 25% faster than before
+        let gameSpeed = 6;
         let score = 0;
         let jumpedEnemies = 0;
         let keys = {};
@@ -93,6 +93,8 @@
         let keydownStartTime = 0;
         let spaceHeld = false;
         let georgiaRBMode = false; // Special invincible mode
+        let prevDisplaySpeed = 0;   // Track displayed speed for threshold crossing
+        let quailTextBounds = null; // Bounding box of the word "QUAIL" on start screen
         
         // Game objects
         let quail = {
@@ -268,9 +270,9 @@
             ctx.font = scoreFont;
             ctx.fillText(`Score: ${score}`, 60, scoreTop);
             
-            // Speed
+            // Speed.. but it's really distance
             ctx.font = speedFont;
-            ctx.fillText(`Speed: ${Math.floor(gameSpeed * 50)}`, 60, speedTop);
+            ctx.fillText(`Distance: ${Math.floor(gameSpeed * 50)}`, 60, speedTop);
             
             // Charge bar
             if (chargingJump || touchCharging) {
@@ -381,11 +383,23 @@
             ctx.textBaseline = 'top';
             ctx.fillStyle = 'yellow';
             ctx.font = titleFont;
-            ctx.fillText('QUAIL RUNNER', canvas.width / 2, topY);
+            // Draw title
+            const title = 'QUAIL RUNNER';
+            ctx.fillText(title, canvas.width / 2, topY);
+            // Compute bounds for the word "QUAIL" inside the centered title
+            const fullW = ctx.measureText(title).width;
+            const quailW = ctx.measureText('QUAIL').width;
+            const titleStartX = canvas.width / 2 - fullW / 2;
+            quailTextBounds = {
+                x: titleStartX,
+                y: topY,
+                w: quailW,
+                h: titleH
+            };
             topY += titleH + gap;
 
             ctx.font = subtitleFont;
-            ctx.fillText('Avoid the Red Tape!', canvas.width / 2, topY);
+            ctx.fillText('Dodge the Red Tape!', canvas.width / 2, topY);
             topY += subtitleH + gap;
 
             ctx.font = instrFont;
@@ -436,6 +450,21 @@
                 width: 30,
                 height: 20,
                 scored: false
+            });
+        }
+        function spawnFlyingEnemy() {
+            const width = 30;
+            const height = 20;
+            const margin = 6; // a few pixels above the player's height from ground
+            const bottomY = GROUND_Y - quail.height - margin;
+            const y = bottomY - height;
+            enemies.push({
+                x: canvas.width + 50,
+                y,
+                width,
+                height,
+                scored: false,
+                flying: true
             });
         }
         
@@ -555,9 +584,9 @@
                 }
             });
             
-            // Update enemies - quarter speed (was gameSpeed * 0.5, now gameSpeed * 0.25)
+            // Update enemies - quarter speed (was gameSpeed * 0.5, now gameSpeed * 0.35)
             enemies.forEach((enemy, index) => {
-                enemy.x -= gameSpeed * 0.25;
+                enemy.x -= gameSpeed * 0.35;
                 
                 // Check scoring
                 if (!enemy.scored && enemy.x < quail.x - 20) {
@@ -626,6 +655,13 @@
             
             // Increase game speed
             gameSpeed += 0.005;
+
+            // Spawn a flying enemy when displayed speed crosses 1000
+            const displaySpeedNow = Math.floor(gameSpeed * 50);
+            if (prevDisplaySpeed <= 1000 && displaySpeedNow > 1000) {
+                spawnFlyingEnemy();
+            }
+            prevDisplaySpeed = displaySpeedNow;
         }
         
         function draw() {
@@ -661,7 +697,7 @@
             gameRunning = true;
             score = 0;
             jumpedEnemies = 0;
-            gameSpeed = 5; // start 25% faster than before
+            gameSpeed = 6;
             enemies = [];
             trails = [];
             confetti = [];
@@ -689,6 +725,7 @@
             enemySpawnTimer = 0;
             // Spawn the first enemy immediately
             spawnEnemy();
+            prevDisplaySpeed = 0;
         }
         
         // Game loop
@@ -702,7 +739,12 @@
             if (gameRunning) {
                 enemySpawnTimer++;
                 if (enemySpawnTimer > 180 + Math.random() * 180) {
-                    spawnEnemy();
+                    const displaySpeed = Math.floor(gameSpeed * 50);
+                    if (displaySpeed > 1000 && Math.random() < 0.5) {
+                        spawnFlyingEnemy();
+                    } else {
+                        spawnEnemy();
+                    }
                     enemySpawnTimer = 0;
                 }
             }
@@ -764,6 +806,21 @@
             const now = Date.now();
             
             if (!gameRunning) {
+                // Allow tapping the word QUAIL to start in GEORGIA RB mode
+                const rect = canvas.getBoundingClientRect();
+                const touch = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]);
+                if (touch) {
+                    const scaleX = canvas.width / rect.width;
+                    const scaleY = canvas.height / rect.height;
+                    const px = (touch.clientX - rect.left) * scaleX;
+                    const py = (touch.clientY - rect.top) * scaleY;
+                    if (score === 0 && quailTextBounds) {
+                        const b = quailTextBounds;
+                        if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) {
+                            georgiaRBMode = true;
+                        }
+                    }
+                }
                 startGame();
             } else {
                 // Double tap detection
@@ -808,6 +865,18 @@
         canvas.addEventListener('click', (e) => {
             // Use click only to start/restart; gameplay jumps handled via touch/keyboard release
             if (!gameRunning) {
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                const px = (e.clientX - rect.left) * scaleX;
+                const py = (e.clientY - rect.top) * scaleY;
+                // If on start screen (score === 0) and clicking the word QUAIL, enable GEORGIA RB mode
+                if (score === 0 && quailTextBounds) {
+                    const b = quailTextBounds;
+                    if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) {
+                        georgiaRBMode = true;
+                    }
+                }
                 startGame();
             }
         });
