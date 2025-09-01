@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -19,15 +19,28 @@ jobs:
 
       - name: Prepare publish folder
         run: |
-          rm -rf dist
           mkdir -p dist
           cp index.html dist/index.html
           cp -R assets dist/assets
-
-      - name: Deploy to pages branch
-        uses: JamesIves/github-pages-deploy-action@v4
+      
+      - name: Upload artifacts
+        uses: actions/upload-pages-artifact@v3
         with:
-          branch: pages
-          folder: dist
-          clean: true
-          single-commit: true
+          path: dist
+
+  deploy:
+    needs: build
+    # permissions:
+    #   pages: write      # to deploy to Pages
+    #   id-token: write   # to verify the deployment originates from an appropriate source
+
+    # Deploy to the github-pages environment
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4 # or specific "vX.X.X" version tag for this action
+
