@@ -863,7 +863,7 @@
         });
         
         canvas.addEventListener('click', (e) => {
-            // Use click only to start/restart; gameplay jumps handled via touch/keyboard release
+            // Click starts/restarts the game only; gameplay jumps handled on mouseup
             if (!gameRunning) {
                 const rect = canvas.getBoundingClientRect();
                 const scaleX = canvas.width / rect.width;
@@ -878,6 +878,38 @@
                     }
                 }
                 startGame();
+            }
+        });
+
+        // Mouse support for charge jump (press to charge, release to jump)
+        canvas.addEventListener('mousedown', (e) => {
+            if (gameRunning) {
+                spaceHeld = true;
+                keydownStartTime = Date.now();
+                // Start potential charging; actual jump happens on mouseup
+                chargingJump = false;
+                chargeAmount = 0;
+            }
+        });
+
+        canvas.addEventListener('mouseup', (e) => {
+            if (gameRunning) {
+                const now = Date.now();
+                const heldMs = now - (keydownStartTime || now);
+                spaceHeld = false;
+                if (chargingJump) {
+                    // Charged jump on release (match keyboard behavior)
+                    chargingJump = false;
+                    const force = 15 + chargeAmount * 10;
+                    quail.velocityY = -force;
+                    quail.velocityX = 3 + chargeAmount * 2; // horizontal scales with charge
+                    quail.isGrounded = false;
+                    quail.canDoubleJump = true;
+                    chargeAmount = 0;
+                } else {
+                    // Quick click -> normal jump (or double jump if airborne)
+                    jump();
+                }
             }
         });
         
