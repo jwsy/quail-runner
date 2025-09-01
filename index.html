@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <title>Quail Runner</title>
+    <style>
+        :root { --safe-area-top: env(safe-area-inset-top, 0px); }
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            /* Prefer viewport-height units that work well in Safari with toolbars/tabs */
+            height: 100vh;   /* fallback */
+            height: 100svh;  /* iOS Safari small viewport (no overlay by bars) */
+            height: 100dvh;  /* dynamic viewport for modern browsers */
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+            touch-action: none;
+        }
+        canvas {
+            border: 2px solid #333;
+            background: #1a1a2e;
+            display: block;
+        }
+        /* instructions removed */
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="932" height="430"></canvas>
+
+    <script>
+        // Game setup
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Viewport-aware UI offset: accounts for top browser UI (iOS/Android)
+        let uiTopOffset = 0;
+        function getCSSPx(name) {
+            const cs = getComputedStyle(document.documentElement);
+            const v = cs.getPropertyValue(name).trim();
+            const n = parseFloat(v);
+            return isNaN(n) ? 0 : n;
+        }
+        function computeUITopOffset() {
+            const vv = window.visualViewport;
+            const safeTop = getCSSPx('--safe-area-top');
+            const overlayTop = vv ? Math.max(vv.offsetTop || 0, 0) : safeTop;
+            const rect = canvas.getBoundingClientRect();
+            // How much of the top overlay overlaps the canvas top edge
+            const overlap = Math.max(0, overlayTop - rect.top);
+            // Canvas CSS pixels match canvas coordinate space here, so use overlap directly
+            uiTopOffset = Math.round(Math.min(overlap, canvas.height * 0.5));
+        }
+        // Keep the offset fresh on viewport changes
+        const recomputeOffset = () => computeUITopOffset();
+        window.addEventListener('resize', recomputeOffset, { passive: true });
+        window.addEventListener('orientationchange', recomputeOffset, { passive: true });
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', recomputeOffset, { passive: true });
+            window.visualViewport.addEventListener('scroll', recomputeOffset, { passive: true });
+        }
+        
+        // Load sprite images
+        const quailSprite = new Image();
+        quailSprite.src = 'assets/quail-sprites.png';
+        const toastySprite = new Image();
+        toastySprite.src = 'assets/toasty-botts.png';
+        
+        // Game constants
+        const GRAVITY = 0.8;
+        const GROUND_Y = canvas.height - 80;
+        const QUAIL_X = 93; // 10% of canvas width (932 * 0.1)
+        
+        // Animation constants
+        let animationFrame = 0;
+        let animationTimer = 0;
+        
+        // Game state
+        let gameRunning = false;
+        let gameSpeed = 4;
+        let score = 0;
+        let jumpedEnemies = 0;
+        let keys = {};
+        let lastTap = 0;
+        let chargingJump = false;
+        let chargeAmount = 0;
+        let touchStartTime = 0;
+        let touchCharging = false;
+        let keydownStartTime = 0;
+        let spaceHeld = false;
+        
+        // Game objects
+        let quail = {
+            x: QUAIL_X,
+            y: GROUND_Y - 40,
+            width: 40,
+            height: 30,
+            velocityY: 0,
+            velocityX: 0,
+            isGrounded: true,
+            canDoubleJump: false
+        };
+        
+        let enemies = [];
+        let trails = [];
+        let confetti = [];
+        let toastyEffect = null;
+        
+        // Draw functions
+        function drawQuail() {
+            if (quailSprite.complete) {
+                // Simple bobbing animation using the base sprite
+                let offsetY = 0;
+                if (gameRunning && quail.isGrounded) {
+                    // Update animation
+                    animationTimer++;
+                    if (animationTimer > 10) { // Change frame every 10 game ticks
+                        animationFrame = (animationFrame + 1) % 4;
+                        animationTimer = 0;
+                    }
+                    // Create a simple bob effect
+                    offsetY = Math.sin(animationFrame * Math.PI / 2) * 2;
+                }
+                
+                // Draw sprite with slight stretching/squashing for running effect
+                let scaleY = quail.isGrounded ? 1 + Math.sin(animationFrame * Math.PI / 2) * 0.1 : 1;
+                let scaleX = quail.isGrounded ? 1 - Math.sin(animationFrame * Math.PI / 2) * 0.05 : 1;
+                
+                ctx.save();
+                ctx.translate(quail.x + quail.width/2, quail.y + quail.height/2);
+                ctx.scale(scaleX, scaleY);
+                ctx.drawImage(
+                    quailSprite,
+                    -quail.width/2, -quail.height/2 + offsetY,
+                    quail.width, quail.height
+                );
+                ctx.restore();
+            } else {
+                // Fallback to rectangles
+                ctx.fillStyle = '#8B4513';
+                ctx.fillRect(quail.x, quail.y, quail.width, quail.height);
+                
+                // Eye (gold)
+                ctx.fillStyle = '#FFD700';
+                ctx.fillRect(quail.x + 8, quail.y + 5, 8, 8);
+                
+                // Beak (orange)
+                ctx.fillStyle = '#FF8C00';
+                ctx.fillRect(quail.x + 25, quail.y + 10, 10, 5);
+            }
+        }
+        
+        function drawEnemy(enemy) {
+            // Main cassette body (red)
+            ctx.fillStyle = '#DC143C';
+            ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+            
+            // Tape reels (dark red)
+            ctx.fillStyle = '#8B0000';
+            ctx.fillRect(enemy.x + 5, enemy.y + 3, 8, 8);
+            ctx.fillRect(enemy.x + 17, enemy.y + 3, 8, 8);
+            
+            // Tape line
+            ctx.fillRect(enemy.x + 5, enemy.y + 15, 20, 2);
+        }
+        
+        function drawGround() {
+            ctx.fillStyle = '#2d5a2d';
+            ctx.fillRect(0, GROUND_Y, canvas.width, 80);
+        }
+        
+        function drawTrails() {
+            trails.forEach(trail => {
+                const alpha = trail.life / trail.maxLife;
+                const size = alpha * 8;
+                
+                ctx.fillStyle = `rgba(160, 32, 240, ${alpha * 0.8})`;
+                ctx.fillRect(trail.x - size/2, trail.y - size/2, size, size);
+            });
+        }
+        
+        function drawConfetti() {
+            confetti.forEach(piece => {
+                ctx.save();
+                ctx.translate(piece.x, piece.y);
+                ctx.rotate(piece.rotation);
+                ctx.font = '16px Arial';
+                ctx.fillText('🇺🇸', -8, 8);
+                ctx.restore();
+            });
+        }
+        
+        function drawUI() {
+            ctx.save();
+            // Normalize text rendering so UI is consistent from the start
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            
+            // Base anchor positions (before adjustment)
+            const baseScoreTop = 40 + uiTopOffset;
+            const baseSpeedTop = 65 + uiTopOffset;
+            const scoreFont = '24px Courier New';
+            const speedFont = '16px Courier New';
+            const scoreHeight = 24; // matches scoreFont size
+            const speedHeight = 16; // matches speedFont size
+            
+            // Compute delta so: (speedTop + speedHeight) == (baseScoreTop + scoreHeight/2)
+            const delta = (baseSpeedTop + speedHeight) - (baseScoreTop + scoreHeight / 2);
+            const scoreTop = baseScoreTop - delta;
+            const speedTop = baseSpeedTop - delta;
+            
+            // Score
+            ctx.fillStyle = 'white';
+            ctx.font = scoreFont;
+            ctx.fillText(`Score: ${score}`, 60, scoreTop);
+            
+            // Speed
+            ctx.font = speedFont;
+            ctx.fillText(`Speed: ${Math.floor(gameSpeed * 50)}`, 60, speedTop);
+            
+            // Charge bar
+            if (chargingJump || touchCharging) {
+                const barWidth = chargeAmount * 100;
+                ctx.fillStyle = 'yellow';
+                ctx.fillRect(quail.x, quail.y - 20, barWidth, 8);
+                ctx.strokeStyle = 'white';
+                ctx.strokeRect(quail.x, quail.y - 20, 100, 8);
+            }
+            
+            // Toasty effect
+            if (toastyEffect && toastyEffect.timer > 0) {
+                const scale = Math.min(toastyEffect.timer / 20, 1);
+                ctx.save();
+                ctx.translate(canvas.width - 120, 60 + uiTopOffset);
+                ctx.scale(scale, scale);
+                
+                if (toastySprite.complete) {
+                    // Calculate proper aspect ratio for toasty sprite
+                    const aspectRatio = toastySprite.width / toastySprite.height;
+                    const spriteHeight = 80;
+                    const spriteWidth = spriteHeight * aspectRatio;
+                    
+                    // Draw toasty sprite with correct proportions
+                    ctx.drawImage(toastySprite, -spriteWidth/2, -spriteHeight/2, spriteWidth, spriteHeight);
+                    
+                    // Add "TOASTY!" text below the sprite
+                    ctx.fillStyle = 'yellow';
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = 2;
+                    ctx.font = 'bold 20px Courier New';
+                    ctx.textAlign = 'center';
+                    ctx.strokeText('TOASTY!', 0, spriteHeight/2 + 25);
+                    ctx.fillText('TOASTY!', 0, spriteHeight/2 + 25);
+                } else {
+                    // Fallback
+                    ctx.fillStyle = 'rgba(255, 100, 100, 0.8)';
+                    ctx.fillRect(-40, -25, 80, 50);
+                    
+                    // Toasty text
+                    ctx.fillStyle = 'yellow';
+                    ctx.font = 'bold 18px Courier New';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('TOASTY!', 0, 5);
+                }
+                
+                ctx.restore();
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawStartScreen() {
+            ctx.save();
+            // Background overlay
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Layout constants
+            const titleFont = '32px Courier New';
+            const subtitleFont = '18px Courier New';
+            const instrFont = '16px Courier New';
+            const titleH = 32;
+            const subtitleH = 18;
+            const instrH = 16;
+            const gap = 12;
+            const logoTitleGap = 16;
+
+            // Compute logo size (maintain aspect and fit)
+            let logoW = 0, logoH = 0;
+            if (quailSprite.complete && quailSprite.width && quailSprite.height) {
+                const maxW = canvas.width * 0.6;
+                const maxH = canvas.height * 0.28;
+                const scale = Math.min(maxW / quailSprite.width, maxH / quailSprite.height);
+                logoW = Math.max(1, Math.floor(quailSprite.width * scale));
+                logoH = Math.max(1, Math.floor(quailSprite.height * scale));
+            }
+
+            // Total block height (logo + texts) and top anchor for vertical centering
+            const totalH = logoH + (logoH ? logoTitleGap : 0) + titleH + gap + subtitleH + gap + instrH;
+            let topY = Math.round((canvas.height - totalH) / 2);
+
+            // Draw logo
+            if (logoH) {
+                const x = (canvas.width - logoW) / 2;
+                ctx.drawImage(quailSprite, x, topY, logoW, logoH);
+                topY += logoH + logoTitleGap;
+            }
+
+            // Draw text, centered
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillStyle = 'yellow';
+            ctx.font = titleFont;
+            ctx.fillText('QUAIL RUNNER', canvas.width / 2, topY);
+            topY += titleH + gap;
+
+            ctx.font = subtitleFont;
+            ctx.fillText('Avoid the Red Tape!', canvas.width / 2, topY);
+            topY += subtitleH + gap;
+
+            ctx.font = instrFont;
+            ctx.fillText('TAP or PRESS SPACE to start', canvas.width / 2, topY);
+
+            ctx.restore();
+        }
+        
+        function drawGameOver() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = 'red';
+            ctx.font = '36px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('GAME OVER', canvas.width/2, canvas.height/2 - 60);
+            
+            ctx.fillStyle = 'white';
+            ctx.font = '20px Courier New';
+            ctx.fillText(`Final Score: ${score}`, canvas.width/2, canvas.height/2 - 20);
+            ctx.fillText(`Enemies Jumped: ${jumpedEnemies}`, canvas.width/2, canvas.height/2 + 10);
+            
+            ctx.fillStyle = 'yellow';
+            ctx.font = '16px Courier New';
+            ctx.fillText('TAP or PRESS SPACE to restart', canvas.width/2, canvas.height/2 + 50);
+            
+            ctx.textAlign = 'left'; // Reset
+        }
+        
+        // Game logic
+        function jump(force = 18) {
+            if (quail.isGrounded) {
+                quail.velocityY = -force;
+                quail.velocityX = 3; // Add horizontal movement when jumping
+                quail.isGrounded = false;
+                quail.canDoubleJump = true;
+            } else if (quail.canDoubleJump) {
+                quail.velocityY = -force * 0.8;
+                quail.velocityX = 2; // Less horizontal movement for double jump
+                quail.canDoubleJump = false;
+            }
+        }
+        
+        function spawnEnemy() {
+            enemies.push({
+                x: canvas.width + 50,
+                y: GROUND_Y - 25,
+                width: 30,
+                height: 20,
+                scored: false
+            });
+        }
+        
+        function createTrail() {
+            if (gameRunning) {
+                // Create trail more frequently and make it follow quail position
+                trails.push({
+                    x: quail.x - 5,
+                    y: quail.y + 15,
+                    life: 90, 
+                    maxLife: 90
+                });
+            }
+        }
+        
+        function createConfetti(x, y) {
+            for (let i = 0; i < 8; i++) {
+                confetti.push({
+                    x: x + (Math.random() - 0.5) * 40,
+                    y: y + (Math.random() - 0.5) * 40,
+                    velocityX: (Math.random() - 0.5) * 4,
+                    velocityY: (Math.random() - 0.5) * 4 - 2,
+                    rotation: Math.random() * Math.PI * 2,
+                    rotationSpeed: (Math.random() - 0.5) * 0.2,
+                    life: 60
+                });
+            }
+        }
+        
+        function showToasty() {
+            toastyEffect = { timer: 280 };
+        }
+        
+        function update() {
+            if (!gameRunning) return;
+            
+            // Update quail physics
+            quail.velocityY += GRAVITY;
+            quail.y += quail.velocityY;
+            
+            // Update horizontal movement
+            quail.x += quail.velocityX;
+            
+            // Apply horizontal drag
+            quail.velocityX *= 0.95;
+            
+            // Keep quail from moving too far right or left
+            if (quail.x > QUAIL_X + 50) {
+                quail.x = QUAIL_X + 50;
+                quail.velocityX = 0;
+            }
+            if (quail.x < QUAIL_X - 20) {
+                quail.x = QUAIL_X - 20;
+                quail.velocityX = 0;
+            }
+            
+            // Ground collision
+            if (quail.y >= GROUND_Y - quail.height) {
+                quail.y = GROUND_Y - quail.height;
+                quail.velocityY = 0;
+                quail.isGrounded = true;
+                // Gradually return to original position when grounded
+                if (quail.x > QUAIL_X) {
+                    quail.x = Math.max(QUAIL_X, quail.x - 1);
+                } else if (quail.x < QUAIL_X) {
+                    quail.x = Math.min(QUAIL_X, quail.x + 1);
+                }
+            }
+            
+            // Create trail
+            createTrail();
+            
+            // Update trails
+            trails.forEach((trail, index) => {
+                trail.life--;
+                if (trail.life <= 0) {
+                    trails.splice(index, 1);
+                }
+            });
+            
+            // Update confetti
+            confetti.forEach((piece, index) => {
+                piece.x += piece.velocityX;
+                piece.y += piece.velocityY;
+                piece.velocityY += 0.1; // gravity
+                piece.rotation += piece.rotationSpeed;
+                piece.life--;
+                
+                if (piece.life <= 0) {
+                    confetti.splice(index, 1);
+                }
+            });
+            
+            // Update enemies - quarter speed (was gameSpeed * 0.5, now gameSpeed * 0.25)
+            enemies.forEach((enemy, index) => {
+                enemy.x -= gameSpeed * 0.25;
+                
+                // Check scoring
+                if (!enemy.scored && enemy.x < quail.x - 20) {
+                    enemy.scored = true;
+                    score += 10;
+                    jumpedEnemies++;
+                    createConfetti(enemy.x, enemy.y);
+                    
+                    if (jumpedEnemies % 3 === 0) {
+                        showToasty();
+                    }
+                }
+                
+                // Check collision
+                if (enemy.x < quail.x + quail.width &&
+                    enemy.x + enemy.width > quail.x &&
+                    enemy.y < quail.y + quail.height &&
+                    enemy.y + enemy.height > quail.y) {
+                    gameRunning = false;
+                }
+                
+                // Remove off-screen enemies
+                if (enemy.x < -50) {
+                    enemies.splice(index, 1);
+                }
+            });
+            
+            // Update toasty effect
+            if (toastyEffect) {
+                toastyEffect.timer--;
+                if (toastyEffect.timer <= 0) {
+                    toastyEffect = null;
+                }
+            }
+            
+            // Update charge - only start charging after 160ms delay
+            const currentTime = Date.now();
+            
+            // Handle keyboard charging
+            if (spaceHeld && currentTime - keydownStartTime > 160 && quail.isGrounded) {
+                if (!chargingJump) {
+                    chargingJump = true;
+                    chargeAmount = 0;
+                }
+            }
+            
+            // Handle touch charging
+            if (touchStartTime > 0 && currentTime - touchStartTime > 160 && quail.isGrounded && !touchCharging) {
+                touchCharging = true;
+                chargeAmount = 0;
+            }
+            
+            if (chargingJump || touchCharging) {
+                chargeAmount = Math.min(chargeAmount + 0.02, 1);
+            }
+            
+            // Increase game speed
+            gameSpeed += 0.005;
+        }
+        
+        function draw() {
+            // Recalculate UI offset each frame to track dynamic toolbars
+            computeUITopOffset();
+            // Clear canvas
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            if (gameRunning) {
+                drawGround();
+                drawTrails();
+                drawQuail();
+                enemies.forEach(drawEnemy);
+                drawConfetti();
+                drawUI();
+            } else if (score > 0) {
+                drawGround();
+                drawQuail();
+                enemies.forEach(drawEnemy);
+                drawGameOver();
+                drawUI();
+            } else {
+                drawGround();
+                drawQuail();
+                drawStartScreen();
+            }
+        }
+        
+        function startGame() {
+            gameRunning = true;
+            score = 0;
+            jumpedEnemies = 0;
+            gameSpeed = 4;
+            enemies = [];
+            trails = [];
+            confetti = [];
+            toastyEffect = null;
+            chargingJump = false;
+            chargeAmount = 0;
+            touchCharging = false;
+            spaceHeld = false;
+            keydownStartTime = 0;
+            touchStartTime = 0;
+            
+            quail.x = QUAIL_X;
+            quail.y = GROUND_Y - 40;
+            quail.velocityY = 0;
+            quail.velocityX = 0;
+            quail.isGrounded = true;
+            quail.canDoubleJump = false;
+            
+            // Reset animation
+            animationFrame = 0;
+            animationTimer = 0;
+            
+            // Start enemy spawning
+            enemySpawnTimer = 0;
+            // Spawn the first enemy immediately
+            spawnEnemy();
+        }
+        
+        // Game loop
+        let enemySpawnTimer = 0;
+        function gameLoop() {
+            update();
+            draw();
+            
+            // Spawn enemies - 3x slower than before (increased timer from 90+random*90 to 270+random*270)
+            if (gameRunning) {
+                enemySpawnTimer++;
+                if (enemySpawnTimer > 180 + Math.random() * 180) {
+                    spawnEnemy();
+                    enemySpawnTimer = 0;
+                }
+            }
+            
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // Input handling
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                
+                if (!gameRunning && score === 0) {
+                    startGame();
+                } else if (!gameRunning && score > 0) {
+                    startGame();
+                } else if (gameRunning) {
+                    if (!spaceHeld) {
+                        spaceHeld = true;
+                        keydownStartTime = Date.now();
+                        // Start potential charging; jump will occur on keyup
+                        chargingJump = false;
+                        chargeAmount = 0;
+                    }
+                }
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                const now = Date.now();
+                const heldMs = now - (keydownStartTime || now);
+                spaceHeld = false;
+                
+                if (gameRunning) {
+                    if (chargingJump) {
+                        // Charged jump on release
+                        chargingJump = false;
+                        const force = 15 + chargeAmount * 10;
+                        quail.velocityY = -force;
+                        quail.velocityX = 3 + chargeAmount * 2; // horizontal scales with charge
+                        quail.isGrounded = false;
+                        quail.canDoubleJump = true;
+                        chargeAmount = 0;
+                    } else {
+                        // Quick tap -> normal jump (or double jump if airborne)
+                        jump();
+                    }
+                }
+            }
+        });
+        
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const now = Date.now();
+            
+            if (!gameRunning) {
+                startGame();
+            } else {
+                // Double tap detection
+                if (now - lastTap < 300) {
+                    if (quail.canDoubleJump && !quail.isGrounded) {
+                        jump();
+                    }
+                } else {
+                    // Begin potential charging; jump will occur on touchend
+                    touchStartTime = now;
+                    touchCharging = false;
+                    chargeAmount = 0;
+                }
+            }
+            lastTap = now;
+        });
+        
+        canvas.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            const now = Date.now();
+            
+            if (gameRunning) {
+                const heldMs = now - (touchStartTime || now);
+                if (touchCharging) {
+                    // Charged jump on release
+                    touchCharging = false;
+                    const force = 15 + chargeAmount * 10;
+                    quail.velocityY = -force;
+                    quail.velocityX = 10 + chargeAmount * 2; // horizontal scales with charge
+                    quail.isGrounded = false;
+                    quail.canDoubleJump = true;
+                    chargeAmount = 0;
+                } else {
+                    // Quick tap -> normal jump (or double jump if airborne)
+                    jump();
+                }
+            }
+            
+            touchStartTime = 0;
+        });
+        
+        canvas.addEventListener('click', (e) => {
+            // Use click only to start/restart; gameplay jumps handled via touch/keyboard release
+            if (!gameRunning) {
+                startGame();
+            }
+        });
+        
+        // Start the game
+        gameLoop();
+    </script>
+</body>
+</html>
