@@ -806,6 +806,21 @@
             const now = Date.now();
             
             if (!gameRunning) {
+                // Allow tapping the word QUAIL to start in GEORGIA RB mode
+                const rect = canvas.getBoundingClientRect();
+                const touch = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]);
+                if (touch) {
+                    const scaleX = canvas.width / rect.width;
+                    const scaleY = canvas.height / rect.height;
+                    const px = (touch.clientX - rect.left) * scaleX;
+                    const py = (touch.clientY - rect.top) * scaleY;
+                    if (score === 0 && quailTextBounds) {
+                        const b = quailTextBounds;
+                        if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) {
+                            georgiaRBMode = true;
+                        }
+                    }
+                }
                 startGame();
             } else {
                 // Double tap detection
